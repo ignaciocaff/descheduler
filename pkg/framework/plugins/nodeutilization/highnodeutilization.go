@@ -41,6 +41,7 @@ const HighNodeUtilizationPluginName = "HighNodeUtilization"
 // this lines makes sure that HighNodeUtilization implements the BalancePlugin
 // interface.
 var _ frameworktypes.BalancePlugin = &HighNodeUtilization{}
+var rotateStartIdx int
 
 // HighNodeUtilization evicts pods from under utilized nodes so that scheduler
 // can schedule according to its plugin. Note that CPU/Memory requests are used
@@ -210,14 +211,31 @@ func (h *HighNodeUtilization) Balance(ctx context.Context, nodes []*v1.Node) *fr
 
 	lowNodes, schedulableNodes := nodeInfos[0], nodeInfos[1]
 
-	// Add logic to limit the number of nodes processed
+	// if we have a limit on the number of nodes to process, we rotate the
+	// nodes so that we can process a different set of nodes each time the
+	// plugin is run. this is useful when we have a large number of nodes
+	// and we want to process only a subset of them. this way we can process
+	// all nodes over time.
 	if h.args.MaxNodesToProcess > 0 && len(lowNodes) > h.args.MaxNodesToProcess {
-		lowNodes = lowNodes[:h.args.MaxNodesToProcess]
-		klog.V(1).InfoS("Limiting the number of underutilized nodes to process", "maxNodesToProcess", h.args.MaxNodesToProcess)
+		start := rotateStartIdx % len(lowNodes)
+		end := start + h.args.MaxNodesToProcess
+
+		var selected []NodeInfo
+		if end <= len(lowNodes) {
+			selected = lowNodes[start:end]
+		} else {
+			selected = append(lowNodes[start:], lowNodes[:end%len(lowNodes)]...)
+		}
+		lowNodes = selected
+
+		rotateStartIdx = (rotateStartIdx + h.args.MaxNodesToProcess) % len(lowNodes)
 	}
 
 	klog.V(1).InfoS("Criteria for a node below target utilization", h.criteria...)
 	klog.V(1).InfoS("Number of underutilized nodes", "totalNumber", len(lowNodes))
+	klog.V(1).Infof("nodes: %v", len(nodes))
+	klog.V(1).Infof("schedulableNodes: %v", len(schedulableNodes))
+	klog.V(1).Infof("lowNodes: %v", len(lowNodes))
 
 	if len(lowNodes) == 0 {
 		klog.V(1).InfoS(
